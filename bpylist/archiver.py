@@ -1,5 +1,5 @@
 from bpylist import bplist
-from bpylist.archive_types import timestamp, uid
+from bpylist.archive_types import timestamp, timestamp_decoder, uid, CycleToken
 from typing import Mapping, List, Optional, Union, Iterator
 
 # The magic number which Cocoa uses as an implementation version.
@@ -110,54 +110,69 @@ class MissingClassMapping(ArchiverError):
         super().__init__(f"no mapping for {name} in {mapping}")
 
 
-class Dict(dict):
+class Mutable:
+    def __new__(cls):
+        return object.__new__(cls)
+
+
+class Dict:
     "Delegate for packing/unpacking NS(Mutable)Dictionary objects"
 
-    @classmethod
-    def decode_archive(cls, archive):
+    def __new__(cls):
+        return dict()
+    
+    def decode_archive(self, archive: 'ArchivedObject'):
         key_uids = archive.decode('NS.keys')
         val_uids = archive.decode('NS.objects')
 
         count = len(key_uids)
-        d = cls()
 
         for i in range(count):
             key = archive._decode_index(key_uids[i])
             val = archive._decode_index(val_uids[i])
-            d[key] = val
-
-        return d
+            self[key] = val
 
 
-class MutableDict(Dict):
+class MutableDict(dict, Dict, Mutable):
     pass
 
 
-
-class Array(list):
+class Array:
     "Delegate for packing/unpacking NS(Mutable)Array objects"
 
-    @classmethod
-    def decode_archive(cls, archive):
+    def __new__(cls):
+        return list()
+
+    def decode_archive(self, archive: 'ArchivedObject'):
         uids = archive.decode('NS.objects')
-        return cls([archive._decode_index(index) for index in uids])
+        for index in uids:
+            self.append(archive._decode_index(index))
 
 
-class MutableArray(Array):
+class MutableArray(list, Array, Mutable):
     pass
 
 
-class Set(set):
+class Set:
     "Delegate for packing/unpacking NS(Mutable)Set objects"
 
     @classmethod
-    def decode_archive(cls, archive):
+    def __new__(cls):
+        return set()
+
+    def decode_archive(self, archive):
         uids = archive.decode('NS.objects')
-        return cls([archive._decode_index(index) for index in uids])
+        for index in uids:
+            self.add(archive._decode_index(index))
 
 
-class MutableSet(Set):
+class MutableSet(set, Set, Mutable):
     pass
+
+
+class MutableData(bytearray, Mutable):
+    def decode_archive(self, archive):
+        return self.extend(archive.decode('NS.data'))
 
 
 class OpaqueObject(object):
@@ -168,12 +183,9 @@ class OpaqueObject(object):
     def __init__(self, data: dict):
         self.__dict__ = data
 
-    @classmethod
-    def decode_archive(cls, archive: 'ArchivedObject'):
-        data = {}
+    def decode_archive(self, archive: 'ArchivedObject'):
         for key in archive.keys():
-            data[key] = archive.decode(key)
-        return cls(data)
+            self.__dict__[key] = archive.decode(key)
 
     def encode_archive(self, archive: 'ArchivingObject'):
         for k, v in self.__dict__.items():
@@ -189,7 +201,8 @@ class ArchivedObject:
     this class is decode(self, key).
     """
 
-    def __init__(self, obj, unarchiver):
+    def __init__(self, uid, obj, unarchiver):
+        self._uid = uid
         self._object = obj
         self._unarchiver = unarchiver
 
@@ -201,11 +214,6 @@ class ArchivedObject:
 
     def keys(self):
         return (k for k in self._object.keys() if k != '$class')
-
-
-class CycleToken:
-    "token used in Unarchive's unpacked_uids cache to help detect cycles"
-    pass
 
 
 class Unarchive:
@@ -294,17 +302,13 @@ class Unarchive:
             return None
 
         obj = self.unpacked_uids.get(index)
-        if obj == CycleToken:
+        if obj is CycleToken:
             raise CircularReference(index)
 
         if obj is not None:
             return obj
 
         raw_obj = self.objects[index]
-
-        # put a temp object in place, in case we have a circular
-        # reference, which we do not really support
-        self.unpacked_uids[index] = CycleToken
 
         # if obj is a (semi-)primitive type (e.g. str)
         if not isinstance(raw_obj, dict):
@@ -315,10 +319,21 @@ class Unarchive:
             raise MissingClassUID(raw_obj)
 
         klass = self.class_for_uid(class_uid)
-        obj = klass.decode_archive(ArchivedObject(raw_obj, self))
 
+        # put a temp object in place, in case we have a circular reference
+        # classes that don't support two-phase initialization should return CycleToken
+        obj = klass.__new__(klass)
         self.unpacked_uids[index] = obj
-        return obj
+
+        new_obj = klass.decode_archive(obj, ArchivedObject(uid, raw_obj, self))
+        if obj is CycleToken:
+            self.unpacked_uids[index] = new_obj
+            return new_obj
+        else:
+            if new_obj is not None:
+                print(klass)
+            assert new_obj is None
+            return obj
 
     def top_object(self):
         "recursively decode the root/top object and return the result"
@@ -512,14 +527,17 @@ class DefaultClassMap(ClassMap):
             'NSMutableArray':      MutableArray,
             'NSSet':               Set,
             'NSMutableSet':        MutableSet,
-            'NSDate':              timestamp
+            'NSMutableData':       MutableData,
+            'NSDate':              timestamp_decoder,
         }
         self.archive_class_map = {
-            Dict: 'NSDictionary',
-            MutableDict: 'NSMutableDictionary',
             dict: 'NSDictionary',
+            MutableDict: 'NSMutableDictionary',
             list: 'NSArray',
+            MutableArray: 'NSMutableArray',
             set: 'NSSet',
+            MutableSet: 'NSMutableSet',
+            MutableData: 'NSMutableData',
             timestamp: 'NSDate'
         }
 
@@ -530,7 +548,13 @@ class DefaultClassMap(ClassMap):
         klass = self.archive_class_map.get(cls)
         if klass is None:
             return None
-        return [klass, 'NSObject']
+        mutable_prefix = 'NSMutable'
+        immutable_prefix = 'NS'
+        if klass.startswith(mutable_prefix):
+            stem = klass[len(mutable_prefix):]
+            return [klass, immutable_prefix + stem, 'NSObject']
+        else:
+            return [klass, 'NSObject']
 
     def update(self, new_map: Mapping[str, type]):
         self.unarchive_class_map.update(new_map)

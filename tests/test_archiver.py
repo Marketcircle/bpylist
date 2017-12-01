@@ -16,19 +16,19 @@ class FooArchive:
         self.empty = empty
         self.recursive = recursive
 
-    def encode_archive(obj, archive):
-        archive.encode('title', obj.title)
-        archive.encode('recurse', obj.recursive)
+    def encode_archive(self, archive):
+        archive.encode('title', self.title)
+        archive.encode('recurse', self.recursive)
 
-    def decode_archive(archive):
-        title   = archive.decode('title')
-        stamp   = archive.decode('stamp')
-        count   = archive.decode('count')
-        cats    = archive.decode('categories')
-        meta    = archive.decode('metadata')
-        empty   = archive.decode('empty')
-        recurse = archive.decode('recursive')
-        return FooArchive(title, stamp, count, cats, meta, empty, recurse)
+    def decode_archive(self, archive):
+        self.title = archive.decode('title')
+        self.stamp = archive.decode('stamp')
+        self.count = archive.decode('count')
+        self.categories = archive.decode('categories')
+        self.metadata = archive.decode('metadata')
+        self.empty = archive.decode('empty')
+        self.recursive = archive.decode('recursive')
+
 
 class UnarchiveTest(TestCase):
 
@@ -112,13 +112,41 @@ class UnarchiveTest(TestCase):
 
     def test_unpack_data(self):
         foo = self.unarchive('data')
-        self.assertEqual(b'', foo.stamp)
+        expected = b'\xca\xfe\xba\xbe\x00\x01\x02\x03'
+        self.assertEqual(expected, foo)
+        self.assertTrue(isinstance(foo, bytearray))
+        self.assertFalse(isinstance(foo, archiver.MutableData))
+        foo = self.unarchive('mutable_data')
+        self.assertEqual(expected, foo)
+        self.assertTrue(isinstance(foo, bytearray))
+        self.assertTrue(isinstance(foo, archiver.MutableData))
 
     def test_unpack_circular_ref(self):
-        with self.assertRaises(archiver.CircularReference):
-            self.unarchive('circular')
+        foo = self.unarchive('circular')
+        self.assertIs(foo.recursive, foo)
 
-    def test_opaque(self):
+    def test_unpack_recursive_array(self):
+        x2 = self.unarchive('recursive_array')
+        self.assertIsInstance(x2, list)
+        self.assertFalse(isinstance(x2, archiver.Mutable))
+        self.assertEqual(len(x2), 1)
+        x1 = x2[0]
+        self.assertIsInstance(x2, list)
+        self.assertIsInstance(x1, archiver.Mutable)
+        self.assertIs(x1[0], x2)
+
+    def test_unpack_recursive_dict(self):
+        x2 = self.unarchive('recursive_dict')
+        self.assertIsInstance(x2, dict)
+        self.assertFalse(isinstance(x2, archiver.Mutable))
+        self.assertEqual(len(x2), 1)
+        x1 = x2['foo']
+        self.assertIsInstance(x2, dict)
+        self.assertIsInstance(x1, archiver.Mutable)
+        self.assertIs(x1['bar'], x2)
+
+
+    def test_unpack_opaque(self):
         foo = self.unarchive('opaque', opaque=True)
         self.assertIsInstance(foo, archiver.OpaqueObject)
         self.assertEqual(foo.foo, 'abc')

@@ -22,21 +22,26 @@ class timestamp(float):
 
     unix2apple_epoch_delta = 978307200.0
 
-    def encode_archive(obj, archive):
+    def encode_archive(self, archive):
         "Delegate for packing timestamps back into the NSDate archive format"
-        offset = obj - timestamp.unix2apple_epoch_delta
+        offset = self - timestamp.unix2apple_epoch_delta
         archive.encode('NS.time', offset)
-
-    def decode_archive(archive):
-        "Delegate for unpacking NSDate objects from an archiver.Archive"
-        offset = archive.decode('NS.time')
-        return timestamp(timestamp.unix2apple_epoch_delta + offset)
 
     def __str__(self):
         return f"bpylist.timestamp {self.to_datetime().__repr__()}"
 
     def to_datetime(self) -> datetime:
         return datetime.fromtimestamp(self, timezone.utc)
+
+
+class timestamp_decoder(object):
+    def __new__(cls):
+        return CycleToken
+
+    def decode_archive(self, archive):
+        "Delegate for unpacking NSDate objects from an archiver.Archive"
+        offset = archive.decode('NS.time')
+        return timestamp(timestamp.unix2apple_epoch_delta + offset)
 
 
 class uid(int):
@@ -51,3 +56,9 @@ class uid(int):
 
     def __str__(self):
         return f"uid({int(self)})"
+
+
+class CycleToken:
+    "token used in Unarchive's unpacked_uids cache to help detect cycles"
+    pass
+

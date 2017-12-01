@@ -105,3 +105,5 @@ venv.bak/
 # mypy
 .mypy_cache/
 
+tests/GenerateTestArchives/GenerateTestArchives.xcodeproj/project.xcworkspace/xcuserdata
+tests/GenerateTestArchives/GenerateTestArchives.xcodeproj/xcuserdata
