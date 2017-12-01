@@ -62,3 +62,86 @@ class CycleToken:
     "token used in Unarchive's unpacked_uids cache to help detect cycles"
     pass
 
+
+class Mutable:
+    def __new__(cls):
+        return object.__new__(cls)
+
+
+class Dict:
+    "Delegate for packing/unpacking NS(Mutable)Dictionary objects"
+
+    def __new__(cls):
+        return dict()
+
+    def decode_archive(self, archive: 'ArchivedObject'):
+        key_uids = archive.decode('NS.keys')
+        val_uids = archive.decode('NS.objects')
+
+        count = len(key_uids)
+
+        for i in range(count):
+            key = archive._decode_index(key_uids[i])
+            val = archive._decode_index(val_uids[i])
+            self[key] = val
+
+
+class MutableDict(dict, Dict, Mutable):
+    pass
+
+
+class Array:
+    "Delegate for packing/unpacking NS(Mutable)Array objects"
+
+    def __new__(cls):
+        return list()
+
+    def decode_archive(self, archive: 'ArchivedObject'):
+        uids = archive.decode('NS.objects')
+        for index in uids:
+            self.append(archive._decode_index(index))
+
+
+class MutableArray(list, Array, Mutable):
+    pass
+
+
+class Set:
+    "Delegate for packing/unpacking NS(Mutable)Set objects"
+
+    @classmethod
+    def __new__(cls):
+        return set()
+
+    def decode_archive(self, archive):
+        uids = archive.decode('NS.objects')
+        for index in uids:
+            self.add(archive._decode_index(index))
+
+
+class MutableSet(set, Set, Mutable):
+    pass
+
+
+class MutableData(bytearray, Mutable):
+    def decode_archive(self, archive):
+        return self.extend(archive.decode('NS.data'))
+
+
+
+class OpaqueObject(object):
+    """
+    Base class for generating opaque classes
+    """
+
+    def __init__(self, data: dict):
+        self.__dict__ = data
+
+    def decode_archive(self, archive: 'ArchivedObject'):
+        for key in archive.keys():
+            self.__dict__[key] = archive.decode(key)
+
+    def encode_archive(self, archive: 'ArchivingObject'):
+        for k, v in self.__dict__.items():
+            archive.encode(k, v)
+
