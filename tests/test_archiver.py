@@ -219,7 +219,9 @@ class ArchiveTest(TestCase):
 
     def test_opaque(self):
         klass = archiver.OpaqueClassMap(archiver.ClassMap()).get_python_class(['XXCustomObject', 'NSObject'])
-        foo = klass({'foo': 'abc', 'bar': 42})
+        foo = klass()
+        foo.foo = 'abc'
+        foo.bar = 42
         plist = bplist.parse(archiver.dumps(foo, opaque=True))
         foo_obj = plist['$objects'][1]
         self.assertEqual('abc', plist['$objects'][foo_obj['foo']])

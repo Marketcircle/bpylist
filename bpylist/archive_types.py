@@ -128,15 +128,10 @@ class MutableData(bytearray, Mutable):
         return self.extend(archive.decode('NS.data'))
 
 
-
 class OpaqueObject(object):
     """
     Base class for generating opaque classes
     """
-
-    def __init__(self, data: dict):
-        self.__dict__ = data
-
     def decode_archive(self, archive: 'ArchivedObject'):
         for key in archive.keys():
             self.__dict__[key] = archive.decode(key)
