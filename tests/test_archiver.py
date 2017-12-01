@@ -112,14 +112,15 @@ class UnarchiveTest(TestCase):
 
     def test_unpack_data(self):
         foo = self.unarchive('data')
-        expected = b'\xca\xfe\xba\xbe\x00\x01\x02\x03'
-        self.assertEqual(expected, foo)
+        self.assertEqual(foo, b'\xca\xfe\xba\xbe\x00\x01\x02\x03')
         self.assertTrue(isinstance(foo, bytearray))
-        self.assertFalse(isinstance(foo, archiver.MutableData))
+        self.assertFalse(isinstance(foo, archiver.Mutable))
+
+    def test_unpack_mutable_data(self):
         foo = self.unarchive('mutable_data')
-        self.assertEqual(expected, foo)
+        self.assertEqual(foo, b'\xca\xfe\xba\xbe\x00\x01\x02\x03')
         self.assertTrue(isinstance(foo, bytearray))
-        self.assertTrue(isinstance(foo, archiver.MutableData))
+        self.assertTrue(isinstance(foo, archiver.Mutable))
 
     def test_unpack_circular_ref(self):
         foo = self.unarchive('circular')
@@ -145,6 +146,27 @@ class UnarchiveTest(TestCase):
         self.assertIsInstance(x1, archiver.Mutable)
         self.assertIs(x1['bar'], x2)
 
+    def test_index_set(self):
+        foo = self.unarchive('index_set', opaque=True)
+        self.assertIsInstance(foo, archiver.OpaqueObject)
+        self.assertEqual(foo.__class__.__name__, 'NSIndexSet')
+        self.assertEqual(foo.NSRangeCount, 1)
+        self.assertEqual(foo.NSLocation, 3)
+        self.assertEqual(foo.NSLength, 213)
+
+    def test_mutable_index_set(self):
+        foo = self.unarchive('mutable_index_set', opaque=True)
+        self.assertIsInstance(foo, archiver.OpaqueObject)
+        self.assertEqual(foo.__class__.__name__, 'NSMutableIndexSet')
+        self.assertEqual(foo.NSRangeCount, 3)
+        self.assertEqual(foo.NSRangeData, b'\x03\x08#\x0c\xea\xf2\x04\xaa\x12')
+
+    def test_index_path(self):
+        foo = self.unarchive('index_path', opaque=True)
+        self.assertIsInstance(foo, archiver.OpaqueObject)
+        self.assertEqual(foo.__class__.__name__, 'NSIndexPath')
+        self.assertEqual(foo.NSIndexPathData, b'\x03\x04\t')
+        self.assertEqual(foo.NSIndexPathLength, 3)
 
     def test_unpack_opaque(self):
         foo = self.unarchive('opaque', opaque=True)
