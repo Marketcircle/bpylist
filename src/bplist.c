@@ -1073,6 +1073,12 @@ generate_plist_object(bplist_generate_state* const state,
     if (type == (PyTypeObject*)uid_class)
         return generate_uid(state, py_obj);
 
+    /* bool is a subclass of int, so it should be checked first */
+    if (type == &PyBool_Type) {
+        *state->current_object++ = (py_obj == Py_True ? plist_type_true : plist_type_false);
+        return 0;
+    }
+
     if (PyLong_Check(py_obj))
         return generate_int(state, py_obj);
 
@@ -1087,12 +1093,6 @@ generate_plist_object(bplist_generate_state* const state,
 
     if (PyList_Check(py_obj))
         return generate_array(state, py_obj);
-
-    if (type == &PyBool_Type) {
-        *state->current_object++ =
-            (py_obj == Py_True ? plist_type_true : plist_type_false);
-        return 0;
-    }
 
     /* since bpylist.timestamp is a subclass of float, we need to
      * check for it before we check for other float objects

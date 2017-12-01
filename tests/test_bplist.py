@@ -156,7 +156,9 @@ class TestBPlistGeneration(BPListTest):
         self.assertDictEqual(dict, bplist.parse(bplist.generate(dict)))
 
     def compare(self, object):
-        self.assertEqual(object, plistlib.loads(bplist.generate(object)))
+        result = plistlib.loads(bplist.generate(object))
+        self.assertEqual(object, result)
+        self.assertEqual(type(object), type(result))
 
     def test_true(self):
         self.compare(True)
