@@ -1,6 +1,6 @@
 from bpylist import bplist
 from bpylist.archive_types import timestamp, uid
-from typing import Mapping
+from typing import Mapping, List, Dict, Optional, Union
 
 # The magic number which Cocoa uses as an implementation version.
 # I don' think there were 99_999 previous implementations, I think
@@ -11,20 +11,30 @@ NSKeyedArchiveVersion = 100_000
 null_uid = uid(0)
 
 
-def unarchive(plist: bytes) -> object:
+def unarchive(plist: bytes, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None) -> object:
     "Unpack an NSKeyedArchived byte blob into a more useful object tree."
-    return Unarchive(plist).top_object()
+    unarch = Unarchive(plist)
+    if isinstance(class_map, ClassMap):
+        unarch.class_map = class_map
+    elif class_map is not None:
+        unarch.class_map.update(class_map)
+    return unarch.top_object()
 
 
-def unarchive_file(path: str) -> object:
+def unarchive_file(path: str, class_map=None) -> object:
     "A convenience for unarchive(plist) which loads an archive from a file for you"
     with open(path, 'rb') as fd:
-        return unarchive(fd.read())
+        return unarchive(fd.read(), class_map)
 
 
-def archive(obj: object) -> bytes:
+def archive(obj: object, class_map=None) -> bytes:
     "Pack an object tree into an NSKeyedArchived blob."
-    return Archive(obj).to_bytes()
+    arch = Archive(obj)
+    if isinstance(class_map, ClassMap):
+        arch.class_map = class_map
+    elif class_map is not None:
+        arch.class_map.update(class_map)
+    return arch.to_bytes()
 
 
 class ArchiverError(Exception):
@@ -71,6 +81,16 @@ class MissingClassName(ArchiverError):
         super().__init__(f"$class had no $classname; $class = {meta}")
 
 
+class MissingClassList(ArchiverError):
+    def __init__(self, meta):
+        super().__init__(f"$class had no $classes; $class = {meta}")
+
+
+class InvalidClassList(ArchiverError):
+    def __init__(self, meta):
+        super().__init__(f"$class first entry in $classes differs from $classname; $class = {meta}")
+
+
 class MissingClassUID(ArchiverError):
     def __init__(self, obj):
         super().__init__(f"object has no $class: {obj}")
@@ -89,6 +109,7 @@ class MissingClassMapping(ArchiverError):
 class DictArchive:
     "Delegate for packing/unpacking NS(Mutable)Dictionary objects"
 
+    @staticmethod
     def decode_archive(archive):
         key_uids = archive.decode('NS.keys')
         val_uids = archive.decode('NS.objects')
@@ -107,6 +128,7 @@ class DictArchive:
 class ListArchive:
     "Delegate for packing/unpacking NS(Mutable)Array objects"
 
+    @staticmethod
     def decode_archive(archive):
         uids = archive.decode('NS.objects')
         return [archive._decode_index(index) for index in uids]
@@ -115,6 +137,7 @@ class ListArchive:
 class SetArchive:
     "Delegate for packing/unpacking NS(Mutable)Set objects"
 
+    @staticmethod
     def decode_archive(archive):
         uids = archive.decode('NS.objects')
         return set([archive._decode_index(index) for index in uids])
@@ -166,6 +189,7 @@ class Unarchive:
 
     def __init__(self, input: bytes):
         self.input = input
+        self.class_map = DefaultClassMap()
         self.unpacked_uids = {}
         self.top_uid = null_uid
         self.objects = None
@@ -204,9 +228,16 @@ class Unarchive:
         if not isinstance(name, str):
             raise MissingClassName(meta)
 
-        klass = UNARCHIVE_CLASS_MAP.get(name)
+        classes = meta.get('$classes')
+        if not isinstance(classes, list):
+            raise MissingClassList(meta)
+
+        if not classes or classes[0] != name:
+            raise InvalidClassList(meta)
+
+        klass = self.class_map.get_python_class(classes)
         if klass is None:
-            raise MissingClassMapping(name, UNARCHIVE_CLASS_MAP)
+            raise MissingClassMapping(name, self.class_map)
 
         return klass
 
@@ -295,14 +326,15 @@ class Archive:
 
     def __init__(self, input):
         self.input = input
+        self.class_map = DefaultClassMap()
         # cache/map class names (str) to uids
-        self.class_map = {}
+        self.class_cache = {}
         # cache/map of already archived objects to uids (to avoid cycles)
-        self.ref_map = {}
+        self.ref_cache = {}
         # objects that go directly into the archive, always start with $null
         self.objects = ['$null']
 
-    def uid_for_archiver(self, archiver: type) -> uid:
+    def uid_for_class_chain(self, class_chain: List[str]) -> uid:
         """
         Ensure the class definition for the archiver is included in the arcive.
 
@@ -315,16 +347,13 @@ class Archive:
         exactly once (no duplicates class metadata).
         """
 
-        val = self.class_map.get(archiver)
+        val = self.class_cache.get(class_chain[0])
         if val:
             return val
 
         val = uid(len(self.objects))
-        self.class_map[archiver] = val
-
-        # TODO: this is where we might need to include the full class ancestry;
-        #       though the open source code from apple does not appear to check
-        self.objects.append({ '$classes': [archiver], '$classname': archiver })
+        self.class_cache[class_chain[0]] = val
+        self.objects.append({ '$classes': class_chain, '$classname': class_chain[0] })
 
         return val
 
@@ -337,17 +366,17 @@ class Archive:
         return self.archive(val)
 
     def encode_list(self, objs, archive_obj):
-        archiver_uid = self.uid_for_archiver('NSArray')
+        archiver_uid = self.uid_for_class_chain(['NSArray', 'NSObject'])
         archive_obj['$class'] = archiver_uid
         archive_obj['NS.objects'] = [self.archive(obj) for obj in objs]
 
     def encode_set(self, objs, archive_obj):
-        archiver_uid = self.uid_for_archiver('NSSet')
+        archiver_uid = self.uid_for_class_chain(['NSSet', 'NSObject'])
         archive_obj['$class'] = archiver_uid
         archive_obj['NS.objects'] = [self.archive(obj) for obj in objs]
 
     def encode_dict(self, obj, archive_obj):
-        archiver_uid = self.uid_for_archiver('NSDictionary')
+        archiver_uid = self.uid_for_class_chain(['NSDictionary', 'NSObject'])
         archive_obj['$class'] = archiver_uid
 
         keys = []
@@ -374,11 +403,11 @@ class Archive:
             self.encode_set(obj, archive_obj)
 
         else:
-            archiver = ARCHIVE_CLASS_MAP.get(cls)
+            archiver = self.class_map.get_objc_class(cls)
             if archiver is None:
-                raise MissingClassMapping(obj, ARCHIVE_CLASS_MAP)
+                raise MissingClassMapping(obj, self.class_map)
 
-            archiver_uid = self.uid_for_archiver(archiver)
+            archiver_uid = self.uid_for_class_chain(archiver)
             archive_obj['$class'] = archiver_uid
 
             archive_wrapper = ArchivingObject(archive_obj, self)
@@ -392,12 +421,12 @@ class Archive:
 
         # the ref_map allows us to avoid infinite recursion caused by
         # cycles in the object graph by functioning as a sort of promise
-        ref = self.ref_map.get(id(obj))
+        ref = self.ref_cache.get(id(obj))
         if ref:
             return ref
 
         index = uid(len(self.objects))
-        self.ref_map[id(obj)] = index
+        self.ref_cache[id(obj)] = index
 
         cls = obj.__class__
         if cls in Archive.primitive_types:
@@ -421,30 +450,46 @@ class Archive:
               '$version': NSKeyedArchiveVersion,
               '$objects': self.objects,
               '$top': { 'root': uid(1) }
-                  }
+        }
 
         return bplist.generate(d)
 
 
-UNARCHIVE_CLASS_MAP = {
-    'NSDictionary':        DictArchive,
-    'NSMutableDictionary': DictArchive,
-    'NSArray':             ListArchive,
-    'NSMutableArray':      ListArchive,
-    'NSSet':               SetArchive,
-    'NSMutableSet':        SetArchive,
-    'NSDate':              timestamp
-    }
+class ClassMap(object):
+    def get_python_class(self, class_chain: List[str]) -> Optional[type]:
+        return None
+
+    def get_objc_class(self, cls: type) -> Optional[List[str]]:
+        return None
 
 
-ARCHIVE_CLASS_MAP = {
-    dict: 'NSDictionary',
-    list: 'NSArray',
-    set: 'NSSet',
-    timestamp: 'NSDate'
-    }
+class DefaultClassMap(ClassMap):
+    def __init__(self):
+        self.unarchive_class_map = {
+            'NSDictionary':        DictArchive,
+            'NSMutableDictionary': DictArchive,
+            'NSArray':             ListArchive,
+            'NSMutableArray':      ListArchive,
+            'NSSet':               SetArchive,
+            'NSMutableSet':        SetArchive,
+            'NSDate':              timestamp
+        }
+        self.archive_class_map = {
+            dict: 'NSDictionary',
+            list: 'NSArray',
+            set: 'NSSet',
+            timestamp: 'NSDate'
+        }
 
+    def get_python_class(self, class_chain):
+        return self.unarchive_class_map.get(class_chain[0])
 
-def update_class_map(new_map: Mapping[str, type]):
-    UNARCHIVE_CLASS_MAP.update(new_map)
-    ARCHIVE_CLASS_MAP.update({ v: k for k, v in new_map.items() })
+    def get_objc_class(self, cls):
+        klass = self.archive_class_map.get(cls)
+        if klass is None:
+            return None
+        return [klass, 'NSObject']
+
+    def update(self, new_map: Mapping[str, type]):
+        self.unarchive_class_map.update(new_map)
+        self.archive_class_map.update({v: k for k, v in new_map.items()})

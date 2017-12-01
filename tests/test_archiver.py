@@ -30,16 +30,14 @@ class FooArchive:
         recurse = archive.decode('recursive')
         return FooArchive(title, stamp, count, cats, meta, empty, recurse)
 
-archiver.update_class_map({ 'crap.Foo': FooArchive })
-
-
 class UnarchiveTest(TestCase):
 
     def fixture(self, name):
         return get_fixture(f'{name}_archive.plist')
 
-    def unarchive(self, plist):
-        return archiver.unarchive(self.fixture(plist))
+    def unarchive(self, plist, with_class_map=True):
+        class_map = {'crap.Foo': FooArchive} if with_class_map else None
+        return archiver.unarchive(self.fixture(plist), class_map)
 
     def test_complains_about_incorrect_archive_type(self):
         with self.assertRaises(archiver.UnsupportedArchiver):
@@ -70,12 +68,8 @@ class UnarchiveTest(TestCase):
             self.unarchive('no_class_name')
 
     def test_complains_about_unmapped_classes(self):
-        del archiver.UNARCHIVE_CLASS_MAP['crap.Foo']
-
         with self.assertRaises(archiver.MissingClassMapping):
-            self.unarchive('simple')
-
-        archiver.update_class_map({ 'crap.Foo': FooArchive })
+            self.unarchive('simple', with_class_map=False)
 
     def test_complains_about_missing_class_uid(self):
         with self.assertRaises(archiver.MissingClassUID):
@@ -162,7 +156,7 @@ class ArchiveTest(TestCase):
                          False,
                          None)
         foo.recursive = foo
-        plist = bplist.parse(archiver.archive(foo))
+        plist = bplist.parse(archiver.archive(foo, class_map={'crap.Foo': FooArchive}))
         foo_obj = plist['$objects'][1]
         self.assertEqual(uid(1), foo_obj['recurse'])
 
