@@ -1,6 +1,6 @@
 from bpylist import bplist
 from bpylist.archive_types import timestamp, uid
-from typing import Mapping, List, Dict, Optional, Union
+from typing import Mapping, List, Optional, Union, Iterator
 
 # The magic number which Cocoa uses as an implementation version.
 # I don' think there were 99_999 previous implementations, I think
@@ -11,13 +11,15 @@ NSKeyedArchiveVersion = 100_000
 null_uid = uid(0)
 
 
-def unarchive(plist: bytes, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None) -> object:
+def unarchive(plist: bytes, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> object:
     "Unpack an NSKeyedArchived byte blob into a more useful object tree."
     unarch = Unarchive(plist)
     if isinstance(class_map, ClassMap):
         unarch.class_map = class_map
     elif class_map is not None:
         unarch.class_map.update(class_map)
+    if opaque:
+        unarch.class_map = OpaqueClassMap(unarch.class_map)
     return unarch.top_object()
 
 
@@ -27,13 +29,15 @@ def unarchive_file(path: str, class_map=None) -> object:
         return unarchive(fd.read(), class_map)
 
 
-def archive(obj: object, class_map=None) -> bytes:
+def archive(obj: object, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> bytes:
     "Pack an object tree into an NSKeyedArchived blob."
     arch = Archive(obj)
     if isinstance(class_map, ClassMap):
         arch.class_map = class_map
     elif class_map is not None:
         arch.class_map.update(class_map)
+    if opaque:
+        arch.class_map = OpaqueClassMap(arch.class_map)
     return arch.to_bytes()
 
 
@@ -106,16 +110,16 @@ class MissingClassMapping(ArchiverError):
         super().__init__(f"no mapping for {name} in {mapping}")
 
 
-class DictArchive:
+class Dict(dict):
     "Delegate for packing/unpacking NS(Mutable)Dictionary objects"
 
-    @staticmethod
-    def decode_archive(archive):
+    @classmethod
+    def decode_archive(cls, archive):
         key_uids = archive.decode('NS.keys')
         val_uids = archive.decode('NS.objects')
 
         count = len(key_uids)
-        d = dict()
+        d = cls()
 
         for i in range(count):
             key = archive._decode_index(key_uids[i])
@@ -125,22 +129,55 @@ class DictArchive:
         return d
 
 
-class ListArchive:
+class MutableDict(Dict):
+    pass
+
+
+
+class Array(list):
     "Delegate for packing/unpacking NS(Mutable)Array objects"
 
-    @staticmethod
-    def decode_archive(archive):
+    @classmethod
+    def decode_archive(cls, archive):
         uids = archive.decode('NS.objects')
-        return [archive._decode_index(index) for index in uids]
+        return cls([archive._decode_index(index) for index in uids])
 
 
-class SetArchive:
+class MutableArray(Array):
+    pass
+
+
+class Set(set):
     "Delegate for packing/unpacking NS(Mutable)Set objects"
 
-    @staticmethod
-    def decode_archive(archive):
+    @classmethod
+    def decode_archive(cls, archive):
         uids = archive.decode('NS.objects')
-        return set([archive._decode_index(index) for index in uids])
+        return cls([archive._decode_index(index) for index in uids])
+
+
+class MutableSet(Set):
+    pass
+
+
+class OpaqueObject(object):
+    """
+    Base class for generating opaque classes
+    """
+
+    def __init__(self, data: dict):
+        self.__dict__ = data
+
+    @classmethod
+    def decode_archive(cls, archive: 'ArchivedObject'):
+        data = {}
+        for key in archive.keys():
+            data[key] = archive.decode(key)
+        return cls(data)
+
+    def encode_archive(self, archive: 'ArchivingObject'):
+        for k, v in self.__dict__.items():
+            archive.encode(k, v)
 
 
 class ArchivedObject:
@@ -161,6 +198,9 @@ class ArchivedObject:
 
     def decode(self, key: str):
         return self._unarchiver.decode_key(self._object, key)
+
+    def keys(self):
+        return (k for k in self._object.keys() if k != '$class')
 
 
 class CycleToken:
@@ -466,15 +506,17 @@ class ClassMap(object):
 class DefaultClassMap(ClassMap):
     def __init__(self):
         self.unarchive_class_map = {
-            'NSDictionary':        DictArchive,
-            'NSMutableDictionary': DictArchive,
-            'NSArray':             ListArchive,
-            'NSMutableArray':      ListArchive,
-            'NSSet':               SetArchive,
-            'NSMutableSet':        SetArchive,
+            'NSDictionary':        Dict,
+            'NSMutableDictionary': MutableDict,
+            'NSArray':             Array,
+            'NSMutableArray':      MutableArray,
+            'NSSet':               Set,
+            'NSMutableSet':        MutableSet,
             'NSDate':              timestamp
         }
         self.archive_class_map = {
+            Dict: 'NSDictionary',
+            MutableDict: 'NSMutableDictionary',
             dict: 'NSDictionary',
             list: 'NSArray',
             set: 'NSSet',
@@ -493,3 +535,42 @@ class DefaultClassMap(ClassMap):
     def update(self, new_map: Mapping[str, type]):
         self.unarchive_class_map.update(new_map)
         self.archive_class_map.update({v: k for k, v in new_map.items()})
+
+
+class OpaqueClassMap(ClassMap):
+    def __init__(self, base: ClassMap):
+        self.base = base
+        self.class_cache = {}
+
+    def get_python_class(self, class_chain):
+        k = self.base.get_python_class(class_chain)
+        if k is not None:
+            return k
+        return self._make_class(iter(class_chain))
+
+    def get_objc_class(self, cls):
+        if issubclass(cls, OpaqueObject):
+            return self._get_class_chain(cls)
+        return self.base.get_objc_class(cls)
+
+    def _make_class(self, class_chain_iter: Iterator[str]) -> type:
+        try:
+            objc_class = next(class_chain_iter)
+        except StopIteration:
+            return OpaqueObject
+        klass = self.class_cache.get(objc_class)
+        if klass is not None:
+            return klass
+        base = self._make_class(class_chain_iter)
+        klass = type(objc_class, (base, ), {})
+        self.class_cache[objc_class] = klass
+        return klass
+
+    def _get_class_chain(self, cls: type) -> List[str]:
+        chain = []
+        while cls is not OpaqueObject:
+            chain.append(cls.__name__)
+            cls = cls.__bases__[0]
+        return chain
+
+

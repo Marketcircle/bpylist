@@ -35,9 +35,9 @@ class UnarchiveTest(TestCase):
     def fixture(self, name):
         return get_fixture(f'{name}_archive.plist')
 
-    def unarchive(self, plist, with_class_map=True):
+    def unarchive(self, plist, with_class_map=True, opaque=False):
         class_map = {'crap.Foo': FooArchive} if with_class_map else None
-        return archiver.unarchive(self.fixture(plist), class_map)
+        return archiver.unarchive(self.fixture(plist), class_map, opaque)
 
     def test_complains_about_incorrect_archive_type(self):
         with self.assertRaises(archiver.UnsupportedArchiver):
@@ -118,6 +118,13 @@ class UnarchiveTest(TestCase):
         with self.assertRaises(archiver.CircularReference):
             self.unarchive('circular')
 
+    def test_opaque(self):
+        foo = self.unarchive('opaque', opaque=True)
+        self.assertIsInstance(foo, archiver.OpaqueObject)
+        self.assertEqual(foo.foo, 'abc')
+        self.assertEqual(foo.bar, 42)
+        self.assertEqual(len(foo.__dict__), 2)
+
 
 class ArchiveTest(TestCase):
 
@@ -160,7 +167,18 @@ class ArchiveTest(TestCase):
         foo_obj = plist['$objects'][1]
         self.assertEqual(uid(1), foo_obj['recurse'])
 
-
+    def test_opaque(self):
+        klass = archiver.OpaqueClassMap(archiver.ClassMap()).get_python_class(['XXCustomObject', 'NSObject'])
+        foo = klass({'foo': 'abc', 'bar': 42})
+        plist = bplist.parse(archiver.archive(foo, opaque=True))
+        foo_obj = plist['$objects'][1]
+        self.assertEqual('abc', plist['$objects'][foo_obj['foo']])
+        self.assertEqual(42, foo_obj['bar'])
+        klass_uid = foo_obj['$class']
+        self.assertEqual(len(foo_obj), 3)
+        class_obj = plist['$objects'][klass_uid]
+        self.assertEqual('XXCustomObject', class_obj['$classname'])
+        self.assertEqual(['XXCustomObject', 'NSObject'], class_obj['$classes'])
 
 
 if __name__ == '__main__':
