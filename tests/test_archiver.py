@@ -37,7 +37,7 @@ class UnarchiveTest(TestCase):
 
     def unarchive(self, plist, with_class_map=True, opaque=False):
         class_map = {'crap.Foo': FooArchive} if with_class_map else None
-        return archiver.unarchive(self.fixture(plist), class_map, opaque)
+        return archiver.loads(self.fixture(plist), class_map, opaque)
 
     def test_complains_about_incorrect_archive_type(self):
         with self.assertRaises(archiver.UnsupportedArchiver):
@@ -179,8 +179,8 @@ class UnarchiveTest(TestCase):
 class ArchiveTest(TestCase):
 
     def archive(self, obj):
-        archived = archiver.archive(obj)
-        unarchived = archiver.unarchive(archived)
+        archived = archiver.dumps(obj)
+        unarchived = archiver.loads(archived)
         self.assertEqual(obj, unarchived)
 
     def test_primitive(self):
@@ -213,14 +213,14 @@ class ArchiveTest(TestCase):
                          False,
                          None)
         foo.recursive = foo
-        plist = bplist.parse(archiver.archive(foo, class_map={'crap.Foo': FooArchive}))
+        plist = bplist.parse(archiver.dumps(foo, class_map={'crap.Foo': FooArchive}))
         foo_obj = plist['$objects'][1]
         self.assertEqual(uid(1), foo_obj['recurse'])
 
     def test_opaque(self):
         klass = archiver.OpaqueClassMap(archiver.ClassMap()).get_python_class(['XXCustomObject', 'NSObject'])
         foo = klass({'foo': 'abc', 'bar': 42})
-        plist = bplist.parse(archiver.archive(foo, opaque=True))
+        plist = bplist.parse(archiver.dumps(foo, opaque=True))
         foo_obj = plist['$objects'][1]
         self.assertEqual('abc', plist['$objects'][foo_obj['foo']])
         self.assertEqual(42, foo_obj['bar'])

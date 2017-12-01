@@ -1,6 +1,7 @@
 from bpylist import bplist
 from bpylist.archive_types import *
-from typing import Mapping, List, Optional, Union, Iterator
+from typing import Mapping, List, Optional, Union, Iterator, IO
+import json
 
 # The magic number which Cocoa uses as an implementation version.
 # I don' think there were 99_999 previous implementations, I think
@@ -11,7 +12,7 @@ NSKeyedArchiveVersion = 100_000
 null_uid = uid(0)
 
 
-def unarchive(plist: bytes, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> object:
+def loads(plist: bytes, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> object:
     "Unpack an NSKeyedArchived byte blob into a more useful object tree."
     unarch = Unarchive(plist)
     if isinstance(class_map, ClassMap):
@@ -23,13 +24,12 @@ def unarchive(plist: bytes, class_map: Union[None, Mapping[str, type], 'ClassMap
     return unarch.top_object()
 
 
-def unarchive_file(path: str, class_map=None) -> object:
-    "A convenience for unarchive(plist) which loads an archive from a file for you"
-    with open(path, 'rb') as fd:
-        return unarchive(fd.read(), class_map)
+def load(f: IO[bytes], class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> object:
+    "Unpack a file-like object with NSKeyedArchived data into a more useful object tree."
+    return loads(f.read(), class_map, opaque)
 
 
-def archive(obj: object, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> bytes:
+def dumps(obj: object, class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False) -> bytes:
     "Pack an object tree into an NSKeyedArchived blob."
     arch = Archive(obj)
     if isinstance(class_map, ClassMap):
@@ -39,6 +39,10 @@ def archive(obj: object, class_map: Union[None, Mapping[str, type], 'ClassMap'] 
     if opaque:
         arch.class_map = OpaqueClassMap(arch.class_map)
     return arch.to_bytes()
+
+
+def dump(obj: object, f: IO[bytes], class_map: Union[None, Mapping[str, type], 'ClassMap'] = None, opaque=False):
+    f.write(dumps(obj, class_map, opaque))
 
 
 class ArchiverError(Exception):
