@@ -165,7 +165,7 @@ class Unarchive:
         self.objects = None
 
     def unpack_archive_header(self):
-        plist = bplist.parse(self.input)
+        plist = bplist.loads(self.input)
 
         archiver = plist.get('$archiver')
         if archiver != 'NSKeyedArchiver':
@@ -429,7 +429,7 @@ class Archive:
               '$top': { 'root': uid(1) }
         }
 
-        return bplist.generate(d)
+        return bplist.dumps(d)
 
 
 class ClassMap(object):

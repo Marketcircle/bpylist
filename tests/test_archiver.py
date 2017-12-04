@@ -213,7 +213,7 @@ class ArchiveTest(TestCase):
                          False,
                          None)
         foo.recursive = foo
-        plist = bplist.parse(archiver.dumps(foo, class_map={'crap.Foo': FooArchive}))
+        plist = bplist.loads(archiver.dumps(foo, class_map={'crap.Foo': FooArchive}))
         foo_obj = plist['$objects'][1]
         self.assertEqual(uid(1), foo_obj['recurse'])
 
@@ -222,7 +222,7 @@ class ArchiveTest(TestCase):
         foo = klass()
         foo.foo = 'abc'
         foo.bar = 42
-        plist = bplist.parse(archiver.dumps(foo, opaque=True))
+        plist = bplist.loads(archiver.dumps(foo, opaque=True))
         foo_obj = plist['$objects'][1]
         self.assertEqual('abc', plist['$objects'][foo_obj['foo']])
         self.assertEqual(42, foo_obj['bar'])

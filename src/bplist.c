@@ -982,7 +982,7 @@ check_int_width(const size_t width, const char* const name)
 }
 
 static PyObject*
-parse_plist(PyObject* const self, PyObject* const plist_data)
+load_plist_from_bytes(PyObject* const self, PyObject* const plist_data)
 {
     char* signed_data;
     ssize_t signed_data_len;
@@ -1041,6 +1041,22 @@ parse_plist(PyObject* const self, PyObject* const plist_data)
     const uint64_t top_object_index = SwapBigToHost64(trailer->top_object);
 
     return parse_plist_object(&state, top_object_index);
+}
+
+static PyObject*
+load_plist_from_file(PyObject* const self, PyObject* const plist_file)
+{
+    PyObject* res = NULL;
+    PyObject* read = PyObject_GetAttrString(plist_file, "read");
+    if (likely(read != NULL)) {
+        PyObject* data = PyObject_CallFunctionObjArgs(read, NULL);
+        if (likely(data != NULL)) {
+            res = load_plist_from_bytes(self, data);
+            Py_DECREF(data);
+        }
+        Py_DECREF(read);
+    }
+    return res;
 }
 
 static int
@@ -1187,7 +1203,7 @@ generate_plist_offset_table_and_trailer(bplist_generate_state* const state)
 }
 
 static PyObject*
-generate_plist(PyObject* const self, PyObject* const py_obj)
+dump_plist_to_bytes(PyObject* const self, PyObject* const py_obj)
 {
     static const size_t initial_offset_table_length = 4096;
     static const size_t initial_objects_buffer_length = 4096;
@@ -1254,26 +1270,67 @@ generate_plist(PyObject* const self, PyObject* const py_obj)
     return state.plist;
 }
 
-PyDoc_STRVAR(parse__docstring__,
-             "parse(plist_data: bytes) -> object\n\n" \
-             "parse a binary plist!");
+static PyObject*
+dump_plist_to_file(PyObject* const self, PyObject* const args)
+{
+    PyObject* py_obj = NULL;
+    PyObject* py_file = NULL;
+    if (!PyArg_ParseTuple(args, "OO", &py_obj, &py_file)) {
+        return NULL;
+    }
+    PyObject* data = dump_plist_to_bytes(self, py_obj);
+    if (likely(data != NULL)) {
+        PyObject* write = PyObject_GetAttrString(py_file, "write");
+        if (likely(write != NULL)) {
+            PyObject* res = PyObject_CallFunctionObjArgs(write, data, NULL);
+            Py_DECREF(res);
+        }
+        Py_DECREF(write);
+    }
+    Py_DECREF(data);
+    Py_RETURN_NONE;
+}
 
-PyDoc_STRVAR(generate__docstring__,
-             "generate(plist_object: bytes) -> bytes\n\n" \
-             "generate a binary plist data blob from a python object");
+PyDoc_STRVAR(loads__docstring__,
+             "loads(s: bytes) -> object\n\n" \
+             "load a python object from a binary plist data");
+
+PyDoc_STRVAR(load__docstring__,
+             "load(f: IO[bytes]) -> object\n\n" \
+             "load a python object from a file containing binary plist data");
+
+PyDoc_STRVAR(dumps__docstring__,
+             "dumps(obj: object) -> bytes\n\n" \
+             "dump python object into a binary plist data blob");
+
+PyDoc_STRVAR(dump__docstring__,
+             "dump(obj: object, f: IO[bytes])\n\n" \
+             "dump python object into a file as binary plist");
 
 static PyMethodDef plist_methods[] = {
     {
-        "parse",
-        parse_plist,
+        "loads",
+        load_plist_from_bytes,
         METH_O,
-        parse__docstring__
+        loads__docstring__
     },
     {
-        "generate",
-        generate_plist,
+        "load",
+        load_plist_from_file,
         METH_O,
-        generate__docstring__
+        load__docstring__
+    },
+    {
+        "dumps",
+        dump_plist_to_bytes,
+        METH_O,
+        dumps__docstring__
+    },
+    {
+        "dump",
+        dump_plist_to_file,
+        METH_VARARGS,
+        dump__docstring__
     },
     { /* sentinel */
         NULL,

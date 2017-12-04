@@ -5,6 +5,7 @@ from bpylist import bplist
 from bpylist.archive_types import uid
 import plistlib
 import cmath
+import io
 
 class BPListTest(TestCase):
 
@@ -14,11 +15,23 @@ class BPListTest(TestCase):
 class TestBPlistParsing(BPListTest):
 
     def parse(self, plist):
-        return bplist.parse(self.fixture(plist))
+        return bplist.loads(self.fixture(plist))
+
+    def test_file_api(self):
+        obj = {'foo': 42}
+        data = bplist.dumps(obj)
+        with io.BytesIO() as f:
+            bplist.dump(obj, f)
+            self.assertEqual(f.getvalue(), data)
+            f.seek(0)
+            restored = bplist.load(f)
+        self.assertEqual(obj, restored)
+        restored = bplist.loads(data)
+        self.assertEqual(obj, restored)
 
     def test_parses_equivalent_to_plistlib(self):
         data = self.fixture('AccessibilityDefinitions')
-        self.assertDictEqual(plistlib.loads(data), bplist.parse(data))
+        self.assertDictEqual(plistlib.loads(data), bplist.loads(data))
 
     def test_true(self):
         self.assertTrue(self.parse('true'))
@@ -153,10 +166,10 @@ class TestBPlistGeneration(BPListTest):
 
     def test_generates_equivalent_accessibility_info(self):
         dict = plistlib.loads(self.fixture('AccessibilityDefinitions'))
-        self.assertDictEqual(dict, bplist.parse(bplist.generate(dict)))
+        self.assertDictEqual(dict, bplist.loads(bplist.dumps(dict)))
 
     def compare(self, object):
-        result = plistlib.loads(bplist.generate(object))
+        result = plistlib.loads(bplist.dumps(object))
         self.assertEqual(object, result)
         self.assertEqual(type(object), type(result))
 
@@ -277,7 +290,7 @@ class TestBPlistGeneration(BPListTest):
 class TestBPlistArchiverSupport(BPListTest):
 
     def generate_and_parse(self, obj):
-        self.assertEqual(obj, bplist.parse(bplist.generate(obj)))
+        self.assertEqual(obj, bplist.loads(bplist.dumps(obj)))
 
     def test_uid(self):
         self.generate_and_parse(uid(1))
@@ -289,11 +302,11 @@ class TestBPlistArchiverSupport(BPListTest):
 
     def test_parse_unknown(self):
         with self.assertRaisesRegex(TypeError, "expected bytes, module found"):
-            bplist.parse(bplist)
+            bplist.loads(bplist)
 
     def test_generate_unknown(self):
         with self.assertRaisesRegex(RuntimeError, "does not support"):
-            bplist.generate(bplist)
+            bplist.dumps(bplist)
 
 if __name__ == '__main__':
     from unittest import main
