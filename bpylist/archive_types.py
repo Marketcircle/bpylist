@@ -1,5 +1,70 @@
 from datetime import datetime, timezone
 
+import dataclasses
+
+
+class Error(Exception):
+    pass
+
+
+def _verify_dataclass_has_fields(dataclass, plist_obj):
+    dataclass_fields = dataclasses.fields(dataclass)
+
+    skip_fields = {'$class'}
+
+    fields_to_verify = plist_obj.keys() - skip_fields
+    fields_with_no_dots = {
+        (f if not f.startswith('NS.') else 'NS' + f[3:])
+        for f in fields_to_verify}
+    unmapped_fields = fields_with_no_dots - {f.name for f in dataclass_fields}
+    if unmapped_fields:
+        raise Error(
+            f"Unmapped fields: {unmapped_fields} for class {dataclass}")
+
+
+class DataclassArchiver:
+    """Helper to easily map python dataclasses (PEP557) to archived objects.
+
+    To create an archiver/unarchiver just subclass the dataclass from this
+    helper, for example:
+
+    @dataclasses.dataclass
+    class MyObjType(DataclassArchiver):
+        int_field: int = 0
+        str_field: str = ""
+        float_field: float = -1.1
+        list_field: list = dataclasses.field(default_factory=list)
+
+    and then register as usually:
+
+    archiver.update_class_map(
+            {'MyObjType': MyObjType }
+    )
+
+    """
+    @staticmethod
+    def encode_archive(obj, archive):
+        for field in dataclasses.fields(type(obj)):
+            archive_field_name = field.name
+            if archive_field_name[:2] == 'NS':
+                archive_field_name = 'NS.' + archive_field_name[2:]
+            archive.encode(archive_field_name, getattr(obj, field.name))
+
+    @classmethod
+    def decode_archive(cls, archive):
+        _verify_dataclass_has_fields(cls, archive.object)
+        field_values = {}
+        for field in dataclasses.fields(cls):
+            archive_field_name = field.name
+            if archive_field_name[:2] == 'NS':
+                archive_field_name = 'NS.' + archive_field_name[2:]
+            value = archive.decode(archive_field_name)
+            if isinstance(value, bytearray):
+                value = bytes(value)
+            field_values[field.name] = value
+        return cls(**field_values)
+
+
 class timestamp(float):
     """
     Represents the concept of time (in seconds) since the UNIX epoch.
@@ -22,11 +87,13 @@ class timestamp(float):
 
     unix2apple_epoch_delta = 978307200.0
 
+    @staticmethod
     def encode_archive(obj, archive):
         "Delegate for packing timestamps back into the NSDate archive format"
         offset = obj - timestamp.unix2apple_epoch_delta
         archive.encode('NS.time', offset)
 
+    @staticmethod
     def decode_archive(archive):
         "Delegate for unpacking NSDate objects from an archiver.Archive"
         offset = archive.decode('NS.time')
@@ -51,3 +118,24 @@ class uid(int):
 
     def __str__(self):
         return f"uid({int(self)})"
+
+
+class NSMutableData:
+    data: bytes
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def encode_archive(self, archive):
+        archive.encode('NS.data', self.data)
+
+    @staticmethod
+    def decode_archive(archive):
+        return NSMutableData(bytes(archive.decode('NS.data')))
+
+    def __eq__(self, other):
+        return self.data == other.data
+
+    def __repr__(self):
+        return "NSMutableData(%s bytes)" % (
+            'null' if self.data is None else len(self.data))
