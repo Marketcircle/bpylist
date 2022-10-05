@@ -1,5 +1,4 @@
 #include <Python.h>
-#include <pytime.h>
 #include <stdint.h>
 
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -418,7 +417,7 @@ parse_data(const uint8_t type,
 {
     const ssize_t length = unpack_length(type, &object);
     if (likely(object + length < object_end))
-        return PyByteArray_FromStringAndSize((char*)object, length);
+        return PyBytes_FromStringAndSize((char*)object, length);
 
     PyErr_Format(PyExc_RuntimeError,
                  "bplist parsing hit an invalid data length: %zd",
